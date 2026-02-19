@@ -7,7 +7,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent
 CSV_PATH = ROOT / "outputs" / "schools_nsw_contacts.csv"
-DOCS_DATA_DIR = ROOT / "docs" / "data"
+DOCS_DATA_DIR = ROOT / "docs" / "data" / "nsw"
 
 
 def clean_text(value: object) -> str:
@@ -86,7 +86,7 @@ def main() -> None:
         json.dumps(suburb_centroids, separators=(",", ":"), ensure_ascii=True),
         encoding="utf-8",
     )
-    print(f"Exported static data: {len(schools)} schools")
+    print(f"Exported static data for NSW: {len(schools)} schools")
 
 
 if __name__ == "__main__":

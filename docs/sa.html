@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>South Australia School Contact Radius Search</title>
+  <link rel="stylesheet" href="./state.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="topnav"><a href="./index.html">Back to Australia States</a></div>
+      <h1 id="pageTitle"></h1>
+      <p id="pageSub" class="sub"></p>
+      <div class="row">
+        <input id="location" placeholder="e.g. postcode or suburb" />
+        <select id="sector">
+          <option value="all" selected>All Sectors</option>
+          <option value="government">Government</option>
+          <option value="catholic">Catholic</option>
+          <option value="independent">Independent</option>
+        </select>
+        <select id="radius">
+          <option value="20">20 km</option>
+          <option value="50" selected>50 km</option>
+          <option value="100">100 km</option>
+        </select>
+        <button id="searchBtn">Search</button>
+        <button id="copyBtn" type="button" disabled>Copy Emails</button>
+      </div>
+      <div id="meta" class="meta"></div>
+      <div id="copyMeta" class="meta"></div>
+      <div id="error" class="err"></div>
+      <div style="overflow:auto;">
+        <table id="results" hidden>
+          <thead>
+            <tr>
+              <th>School</th>
+              <th>Sector</th>
+              <th>Suburb</th>
+              <th>Postcode</th>
+              <th>Distance (km)</th>
+              <th>Email</th>
+              <th>Contact Form</th>
+              <th>Website</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    window.STATE_CODE = "sa";
+    window.STATE_NAME = "South Australia";
+  </script>
+  <script src="./js/state-search.js"></script>
+</body>
+</html>
