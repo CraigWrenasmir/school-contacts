@@ -16,6 +16,16 @@ Publicly sourced, ethics-first NSW school contact database and search tool acros
 5. `python 05_enrich_geospatial.py`
 6. `python 06_export_static_site_data.py`
 
+## VIC Build (Current)
+
+1. `python 11_vic_build_dataset.py`
+2. `python 07_export_state_static_data.py --state vic --csv outputs/schools_vic_contacts.csv`
+
+Notes:
+- VIC source currently uses the official `School Locations 2025` dataset on `data.gov.au`.
+- This provides sector/address/phone/coordinates and powers VIC radius search.
+- Public emails/websites are not present in this source and are currently blank for VIC.
+
 ## Local Run (FastAPI)
 
 ```bash
