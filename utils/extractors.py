@@ -20,7 +20,9 @@ GENERAL_PREFIXES = (
 )
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 EMAIL_EXACT_RE = re.compile(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", re.IGNORECASE)
-PERSONAL_STYLE_RE = re.compile(r"^[a-z]+\.[a-z]+@", re.IGNORECASE)
+# Treat obvious personal-address pattern as lower priority only (not a hard reject).
+# Require both segments to be longer, so school aliases like "highgate.ps@" are kept.
+PERSONAL_STYLE_RE = re.compile(r"^[a-z]{3,}\.[a-z]{3,}@", re.IGNORECASE)
 OBFUSCATED_EMAIL_BRACKET_RE = re.compile(
     r"\b([A-Z0-9._%+-]{2,})\s*(?:\(|\[|\{)\s*at\s*(?:\)|\]|\})\s*([A-Z0-9.-]{2,})\s*(?:\(|\[|\{)\s*dot\s*(?:\)|\]|\})\s*([A-Z]{2,})\b",
     re.IGNORECASE,
@@ -33,6 +35,17 @@ POSTCODE_RE = re.compile(r"\b(\d{4})\b")
 INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 ALLOWED_TLDS = {"au", "com", "org", "net", "edu", "gov", "school", "online"}
 PLACEHOLDER_DOMAINS = {"example.com", "test.com", "domain.com", "email.com", "yourdomain.com"}
+
+# Australian state education departments use centralised email domains that differ
+# from individual school website domains (e.g. *.vic.edu.au websites use
+# @education.vic.gov.au email addresses). These trusted domains bypass the
+# website/email domain-relationship check so valid school emails aren't rejected.
+TRUSTED_GOV_EMAIL_DOMAINS = {
+    "education.vic.gov.au",   # VIC govt: schoolname.ps@education.vic.gov.au
+    "edumail.vic.gov.au",     # VIC govt: legacy domain still in use
+    "eq.edu.au",              # QLD govt: schoolname@eq.edu.au (on *.qld.edu.au sites)
+    "qed.qld.gov.au",         # QLD govt: alternative dept domain
+}
 
 
 def _unique(values: Iterable[str]) -> list[str]:
@@ -121,7 +134,14 @@ def classify_public_email(
     website_host = _extract_hostname(website_url)
     # For directory-provided records, domain mismatch with website is common and not
     # a reliable signal. Only enforce strict domain relationship for website text extraction.
-    if website_host and source not in {"directory", "mixed"} and not _domains_related(domain, website_host):
+    # Trusted government education domains are exempt: state depts use a central email
+    # domain (e.g. education.vic.gov.au) that differs from school website domains (*.vic.edu.au).
+    if (
+        website_host
+        and source not in {"directory", "mixed"}
+        and domain not in TRUSTED_GOV_EMAIL_DOMAINS
+        and not _domains_related(domain, website_host)
+    ):
         if source == "text":
             return None, "invalid", "unrelated_domain_low_confidence"
         return clean, "suspicious", "unrelated_domain"
@@ -220,7 +240,9 @@ def choose_general_email(
     if non_personal:
         return non_personal[0].lower()
 
-    return None
+    # If only personal-style candidates exist, still return one to avoid
+    # dropping publicly listed general addresses with dot-style aliases.
+    return candidates[0].lower()
 
 
 def extract_school_core_fields(soup: BeautifulSoup, page_url: str) -> dict:
