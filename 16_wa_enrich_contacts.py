@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 from datetime import date
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import pandas as pd
 import yaml
@@ -56,6 +57,75 @@ def ensure_http(url: str | None) -> str | None:
     return "https://" + s
 
 
+def extract_school_website_from_schoolsonline(html: str) -> str | None:
+    # Schoolsonline often exposes the actual school site via:
+    # javascript:openNewPage('http://www.wembleyps.wa.edu.au', 'schURL')
+    match = re.search(
+        r"openNewPage\('(?P<url>https?://[^']+\.wa\.edu\.au[^']*)'",
+        html or "",
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return ensure_http(match.group("url"))
+
+
+def extract_school_id_from_url(url: str) -> str | None:
+    try:
+        q = parse_qs(urlparse(url).query)
+    except Exception:
+        return None
+    vals = q.get("schoolID") or q.get("schoolId") or q.get("schoolid")
+    if not vals:
+        return None
+    school_id = str(vals[0]).strip()
+    return school_id if school_id.isdigit() else None
+
+
+def extract_schoolsonline_contact_email(
+    client: EthicalHttpClient, website_url: str
+) -> tuple[str | None, str | None]:
+    parsed = urlparse(website_url)
+    host = (parsed.netloc or "").lower()
+    path = (parsed.path or "").lower()
+    school_id = extract_school_id_from_url(website_url)
+    if "det.wa.edu.au" not in host or "schoolsonline" not in path or not school_id:
+        return None, None
+
+    contact_url = f"{parsed.scheme or 'https'}://{parsed.netloc}/schoolsonline/contact.do?schoolID={school_id}"
+    try:
+        resp = client.get(contact_url)
+        if resp.status_code >= 400:
+            return None, None
+        soup = BeautifulSoup(resp.text, "lxml")
+        text = soup.get_text("\n", strip=True)
+        email = (
+            choose_general_email(extract_mailto_emails(soup), website_url=contact_url, source="mailto")
+            or choose_general_email(
+                extract_cloudflare_protected_emails(soup), website_url=contact_url, source="cloudflare"
+            )
+            or choose_general_email(extract_emails_from_text(text), website_url=contact_url, source="text")
+        )
+        form_url = extract_contact_form_url(soup, contact_url)
+        return email, form_url
+    except Exception:
+        return None, None
+
+
+def resolve_effective_homepage(client: EthicalHttpClient, website_url: str) -> tuple[str, str | None]:
+    resp = client.get(website_url)
+    if resp.status_code >= 400:
+        return website_url, None
+
+    effective = website_url
+    parsed = urlparse(resp.url or website_url)
+    if "det.wa.edu.au" in (parsed.netloc or "").lower() and "schoolsonline" in (parsed.path or "").lower():
+        school_site = extract_school_website_from_schoolsonline(resp.text)
+        if school_site:
+            return school_site, resp.text
+    return ensure_http(resp.url) or website_url, resp.text
+
+
 def enrich_from_homepage(client: EthicalHttpClient, website_url: str) -> tuple[str | None, str | None]:
     def extract_from_soup(soup: BeautifulSoup, base_url: str) -> tuple[str | None, str | None]:
         all_text = soup.get_text("\n", strip=True)
@@ -100,15 +170,25 @@ def enrich_from_homepage(client: EthicalHttpClient, website_url: str) -> tuple[s
         return out[:8]
 
     try:
-        resp = client.get(website_url)
-        if resp.status_code >= 400:
-            return None, None
-        soup = BeautifulSoup(resp.text, "lxml")
-        email, form_url = extract_from_soup(soup, website_url)
+        schoolsonline_email, schoolsonline_form = extract_schoolsonline_contact_email(client, website_url)
+        effective_homepage, preloaded_html = resolve_effective_homepage(client, website_url)
+        if preloaded_html is not None and effective_homepage == website_url:
+            soup = BeautifulSoup(preloaded_html, "lxml")
+        else:
+            resp = client.get(effective_homepage)
+            if resp.status_code >= 400:
+                return None, None
+            soup = BeautifulSoup(resp.text, "lxml")
+
+        email, form_url = extract_from_soup(soup, effective_homepage)
+        if not email and schoolsonline_email:
+            email = schoolsonline_email
+        if not form_url and schoolsonline_form:
+            form_url = schoolsonline_form
         if email and form_url:
             return email, form_url
 
-        for cu in candidate_contact_urls(soup, website_url):
+        for cu in candidate_contact_urls(soup, effective_homepage):
             try:
                 cr = client.get(cu)
                 if cr.status_code >= 400:
@@ -123,6 +203,10 @@ def enrich_from_homepage(client: EthicalHttpClient, website_url: str) -> tuple[s
                     break
             except Exception:
                 continue
+        if not email and schoolsonline_email:
+            email = schoolsonline_email
+        if not form_url and schoolsonline_form:
+            form_url = schoolsonline_form
         return email, form_url
     except Exception:
         return None, None
@@ -168,6 +252,9 @@ def main() -> None:
             existing_form = str(row.get("contact_form_url") or "").strip()
             try:
                 email, form_url = enrich_from_homepage(client, website)
+                # Replace known generic department-level address with school-specific email when found.
+                if existing_email.lower() == "teachinwa@education.wa.edu.au":
+                    existing_email = ""
                 if email and (not existing_email or existing_email.lower() == "nan"):
                     df.at[i, "public_email"] = email
                 if form_url and (not existing_form or existing_form.lower() == "nan"):
