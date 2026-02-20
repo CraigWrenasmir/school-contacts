@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -63,7 +64,15 @@ class EthicalHttpClient:
         parser = RobotFileParser()
         parser.set_url(robots_url)
         try:
-            parser.read()
+            robots_text = self._fetch_robots_text(robots_url)
+            if not robots_text and parsed.scheme == "https":
+                # Fallback for environments with older TLS stacks.
+                http_robots_url = f"http://{parsed.netloc}/robots.txt"
+                robots_text = self._fetch_robots_text(http_robots_url)
+            if robots_text:
+                parser.parse(robots_text.splitlines())
+            else:
+                raise RuntimeError("robots fetch failed")
         except Exception:
             # Fail closed: if robots cannot be read, disallow crawling for safety.
             parser = RobotFileParser()
@@ -71,6 +80,34 @@ class EthicalHttpClient:
 
         self._robots_cache[base] = parser
         return parser
+
+    def _fetch_robots_text(self, robots_url: str) -> str:
+        try:
+            self._rate_limit()
+            response = self.session.get(robots_url, timeout=self.config.timeout_seconds)
+            self._last_request_ts = time.time()
+            if response.status_code >= 400:
+                return ""
+            return response.text or ""
+        except requests.exceptions.SSLError:
+            # Local TLS compatibility fallback using curl.
+            cmd = [
+                "curl",
+                "-L",
+                "-sS",
+                "--max-time",
+                str(int(self.config.timeout_seconds)),
+                "-A",
+                self.config.user_agent,
+                robots_url,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+            self._last_request_ts = time.time()
+            if result.returncode != 0:
+                return ""
+            return result.stdout or ""
+        except Exception:
+            return ""
 
     def is_allowed(self, url: str) -> bool:
         parser = self._get_robot_parser(url)

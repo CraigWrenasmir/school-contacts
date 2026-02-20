@@ -45,6 +45,7 @@ TRUSTED_GOV_EMAIL_DOMAINS = {
     "edumail.vic.gov.au",     # VIC govt: legacy domain still in use
     "eq.edu.au",              # QLD govt: schoolname@eq.edu.au (on *.qld.edu.au sites)
     "qed.qld.gov.au",         # QLD govt: alternative dept domain
+    "education.tas.gov.au",   # TAS govt: schoolname@education.tas.gov.au
 }
 
 
@@ -225,13 +226,19 @@ def choose_general_email(
         return None
 
     validated = []
+    suspicious = []
     for email in clean:
         normalised, status, _ = classify_public_email(email, website_url=website_url, source=source)
         if not normalised:
             continue
         if status == "valid":
             validated.append(normalised)
+        elif status == "suspicious":
+            suspicious.append(normalised)
     candidates = validated
+    if not candidates and source in {"mailto", "cloudflare", "jsonld"}:
+        # High-confidence structured sources: keep suspicious-domain emails as fallback.
+        candidates = suspicious
     if not candidates:
         return None
 
