@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Iterable, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -19,12 +19,16 @@ GENERAL_PREFIXES = (
     "school@",
 )
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+EMAIL_EXACT_RE = re.compile(r"^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$", re.IGNORECASE)
 PERSONAL_STYLE_RE = re.compile(r"^[a-z]+\.[a-z]+@", re.IGNORECASE)
 OBFUSCATED_EMAIL_RE = re.compile(
     r"\b([A-Z0-9._%+-]+)\s*(?:\(|\[|\{)?(?:at|@)(?:\)|\]|\})?\s*([A-Z0-9.-]+)\s*(?:\(|\[|\{)?(?:dot|\.)(?:\)|\]|\})?\s*([A-Z]{2,})\b",
     re.IGNORECASE,
 )
 POSTCODE_RE = re.compile(r"\b(\d{4})\b")
+INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
+ALLOWED_TLDS = {"au", "com", "org", "net", "edu", "gov", "school", "online"}
+PLACEHOLDER_DOMAINS = {"example.com", "test.com", "domain.com", "email.com", "yourdomain.com"}
 
 
 def _unique(values: Iterable[str]) -> list[str]:
@@ -39,6 +43,86 @@ def _unique(values: Iterable[str]) -> list[str]:
     return out
 
 
+def _normalise_email_candidate(value: str) -> str:
+    clean = INVISIBLE_CHARS_RE.sub("", value or "")
+    clean = clean.strip().lower().strip(".,;:!?\"'`()[]{}<>")
+    return clean
+
+
+def _extract_hostname(url: str | None) -> str | None:
+    if not url:
+        return None
+    raw = str(url).strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "https://" + raw
+    try:
+        host = (urlparse(raw).hostname or "").strip().lower()
+    except Exception:
+        return None
+    if host.startswith("www."):
+        host = host[4:]
+    return host or None
+
+
+def _registrable_domain(host: str) -> str:
+    labels = [p for p in host.split(".") if p]
+    if len(labels) < 2:
+        return host
+    joined = ".".join(labels)
+    if joined.endswith((".com.au", ".edu.au", ".gov.au", ".org.au", ".net.au")) and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return ".".join(labels[-2:])
+
+
+def _domains_related(email_domain: str, website_host: str) -> bool:
+    if (
+        email_domain == website_host
+        or email_domain.endswith("." + website_host)
+        or website_host.endswith("." + email_domain)
+    ):
+        return True
+    return _registrable_domain(email_domain) == _registrable_domain(website_host)
+
+
+def classify_public_email(
+    email: str | None, website_url: str | None = None, source: str = "text"
+) -> tuple[str | None, str, str]:
+    if not email:
+        return None, "invalid", "empty"
+
+    clean = _normalise_email_candidate(str(email))
+    if not clean:
+        return None, "invalid", "empty"
+    if " " in clean or clean.count("@") != 1:
+        return None, "invalid", "invalid_format"
+    if not EMAIL_EXACT_RE.match(clean):
+        return None, "invalid", "invalid_format"
+
+    local_part, domain = clean.split("@", 1)
+    if len(local_part) < 2:
+        return None, "invalid", "local_too_short"
+    if domain in PLACEHOLDER_DOMAINS:
+        return None, "invalid", "placeholder_domain"
+    if "." not in domain:
+        return None, "invalid", "missing_tld"
+
+    tld = domain.rsplit(".", 1)[-1]
+    if not re.fullmatch(r"[a-z]{2,}", tld):
+        return None, "invalid", "invalid_tld_format"
+    if tld not in ALLOWED_TLDS:
+        return None, "invalid", "invalid_tld"
+
+    website_host = _extract_hostname(website_url)
+    if website_host and not _domains_related(domain, website_host):
+        if source == "text":
+            return None, "invalid", "unrelated_domain_low_confidence"
+        return clean, "suspicious", "unrelated_domain"
+
+    return clean, "valid", "ok"
+
+
 def extract_emails_from_text(text: str) -> list[str]:
     if not text:
         return []
@@ -46,22 +130,6 @@ def extract_emails_from_text(text: str) -> list[str]:
     for local, domain, tld in OBFUSCATED_EMAIL_RE.findall(text):
         emails.append(f"{local}@{domain}.{tld}")
     return _unique(emails)
-
-
-def choose_general_email(emails: Iterable[str]) -> Optional[str]:
-    clean = _unique(e for e in emails if e)
-    if not clean:
-        return None
-
-    preferred = [e for e in clean if e.lower().startswith(GENERAL_PREFIXES)]
-    if preferred:
-        return preferred[0].lower()
-
-    non_personal = [e for e in clean if not PERSONAL_STYLE_RE.match(e.lower())]
-    if non_personal:
-        return non_personal[0].lower()
-
-    return None
 
 
 def extract_mailto_emails(soup: BeautifulSoup) -> list[str]:
@@ -118,6 +186,38 @@ def extract_contact_form_url(soup: BeautifulSoup, base_url: str) -> Optional[str
     return None
 
 
+def choose_general_email(
+    emails: Iterable[str], website_url: str | None = None, source: str = "text"
+) -> Optional[str]:
+    clean = _unique(e for e in emails if e)
+    if not clean:
+        return None
+
+    validated = []
+    suspicious = []
+    for email in clean:
+        normalised, status, _ = classify_public_email(email, website_url=website_url, source=source)
+        if not normalised:
+            continue
+        if status == "valid":
+            validated.append(normalised)
+        else:
+            suspicious.append(normalised)
+    candidates = validated or suspicious
+    if not candidates:
+        return None
+
+    preferred = [e for e in candidates if e.lower().startswith(GENERAL_PREFIXES)]
+    if preferred:
+        return preferred[0].lower()
+
+    non_personal = [e for e in candidates if not PERSONAL_STYLE_RE.match(e.lower())]
+    if non_personal:
+        return non_personal[0].lower()
+
+    return None
+
+
 def extract_school_core_fields(soup: BeautifulSoup, page_url: str) -> dict:
     result = {
         "school_name": None,
@@ -138,8 +238,11 @@ def extract_school_core_fields(soup: BeautifulSoup, page_url: str) -> dict:
     if phone_match:
         result["phone"] = phone_match.group(0)
 
-    emails = extract_mailto_emails(soup) + extract_emails_from_text(all_text)
-    result["public_email"] = choose_general_email(emails)
+    mailto_emails = extract_mailto_emails(soup)
+    text_emails = extract_emails_from_text(all_text)
+    result["public_email"] = choose_general_email(
+        mailto_emails, website_url=page_url, source="mailto"
+    ) or choose_general_email(text_emails, website_url=page_url, source="text")
 
     postcode_match = POSTCODE_RE.search(all_text)
     if postcode_match:
@@ -169,7 +272,9 @@ def extract_school_core_fields(soup: BeautifulSoup, page_url: str) -> dict:
             if not result["website_url"]:
                 result["website_url"] = item.get("url")
             if not result["public_email"]:
-                result["public_email"] = choose_general_email([item.get("email", "")])
+                result["public_email"] = choose_general_email(
+                    [item.get("email", "")], website_url=page_url, source="jsonld"
+                )
             address = item.get("address")
             if isinstance(address, dict):
                 if not result["suburb"]:
