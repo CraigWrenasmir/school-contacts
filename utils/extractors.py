@@ -7,9 +7,23 @@ from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
 
-GENERAL_PREFIXES = ("info@", "admin@", "office@", "contact@")
+GENERAL_PREFIXES = (
+    "info@",
+    "admin@",
+    "office@",
+    "contact@",
+    "enquiries@",
+    "enquiry@",
+    "reception@",
+    "registrar@",
+    "school@",
+)
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
 PERSONAL_STYLE_RE = re.compile(r"^[a-z]+\.[a-z]+@", re.IGNORECASE)
+OBFUSCATED_EMAIL_RE = re.compile(
+    r"\b([A-Z0-9._%+-]+)\s*(?:\(|\[|\{)?(?:at|@)(?:\)|\]|\})?\s*([A-Z0-9.-]+)\s*(?:\(|\[|\{)?(?:dot|\.)(?:\)|\]|\})?\s*([A-Z]{2,})\b",
+    re.IGNORECASE,
+)
 POSTCODE_RE = re.compile(r"\b(\d{4})\b")
 
 
@@ -26,7 +40,12 @@ def _unique(values: Iterable[str]) -> list[str]:
 
 
 def extract_emails_from_text(text: str) -> list[str]:
-    return _unique(EMAIL_RE.findall(text or ""))
+    if not text:
+        return []
+    emails = EMAIL_RE.findall(text)
+    for local, domain, tld in OBFUSCATED_EMAIL_RE.findall(text):
+        emails.append(f"{local}@{domain}.{tld}")
+    return _unique(emails)
 
 
 def choose_general_email(emails: Iterable[str]) -> Optional[str]:
@@ -49,8 +68,36 @@ def extract_mailto_emails(soup: BeautifulSoup) -> list[str]:
     emails = []
     for a in soup.select("a[href^='mailto:']"):
         href = a.get("href", "").split("mailto:", 1)[-1].split("?", 1)[0].strip()
-        if href:
-            emails.append(href)
+        if not href:
+            continue
+        for part in re.split(r"[;,]", href):
+            part = part.strip()
+            if part:
+                emails.append(part)
+    return _unique(emails)
+
+
+def _decode_cloudflare_email(encoded: str) -> str:
+    try:
+        raw = bytes.fromhex(encoded)
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    key = raw[0]
+    decoded = "".join(chr(b ^ key) for b in raw[1:])
+    return decoded.strip()
+
+
+def extract_cloudflare_protected_emails(soup: BeautifulSoup) -> list[str]:
+    emails = []
+    for node in soup.select("[data-cfemail]"):
+        encoded = (node.get("data-cfemail") or "").strip()
+        if not encoded:
+            continue
+        decoded = _decode_cloudflare_email(encoded)
+        if decoded:
+            emails.append(decoded)
     return _unique(emails)
 
 

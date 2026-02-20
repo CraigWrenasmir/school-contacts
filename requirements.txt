@@ -6,6 +6,7 @@ pyyaml
 tqdm
 sqlite-utils
 urllib3
+openpyxl
 fastapi
 uvicorn
 jinja2
