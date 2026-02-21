@@ -199,8 +199,11 @@
   function downloadCSV() {
     if (!currentRows.length) return;
     const { center, radiusKm, sectorLabel } = state.lastSearch;
+    const exportRows = selectedIndices.size > 0
+      ? [...selectedIndices].sort((a, b) => a - b).map((i) => currentRows[i])
+      : currentRows;
     const headers = ["School", "Sector", "Suburb", "Postcode", "Phone", "Distance (km)", "Email", "Contact Form", "Website"];
-    const rows = currentRows.map((r) => [
+    const rows = exportRows.map((r) => [
       r.school_name, r.sector, r.suburb, r.postcode,
       r.phone || "", r.distance_km,
       r.public_email || "", r.contact_form_url || "", r.website_url || "",
@@ -212,7 +215,8 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `schools-${stateCode}-${center.label.replace(/\s+/g, "-").toLowerCase()}-${radiusKm}km.csv`;
+    const selSuffix = selectedIndices.size > 0 ? `-${selectedIndices.size}selected` : "";
+    a.download = `schools-${stateCode}-${center.label.replace(/\s+/g, "-").toLowerCase()}-${radiusKm}km${selSuffix}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
