@@ -23,3 +23,5 @@ th, td { border-bottom: 1px solid var(--line); padding: 0.55rem 0.35rem; text-al
 th { color: var(--muted); font-weight: 600; }
 a { color: #095d92; text-decoration: none; }
 .topnav { margin-bottom: 0.75rem; }
+.flavour { display: none; margin-top: 0.5rem; padding: 0.5rem 0.85rem; background: #f0faf8; border-left: 3px solid var(--accent); border-radius: 0 8px 8px 0; font-size: 0.88rem; color: var(--muted); font-style: italic; }
+.flavour.visible { display: block; }

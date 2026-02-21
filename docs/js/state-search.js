@@ -1,4 +1,11 @@
 (function () {
+  // Load region flavour script lazily (available well before any user search)
+  (function () {
+    var s = document.createElement("script");
+    s.src = "./js/region-flavour.js";
+    document.head.appendChild(s);
+  })();
+
   const stateCode = (window.STATE_CODE || "nsw").toLowerCase();
   const stateName = window.STATE_NAME || stateCode.toUpperCase();
 
@@ -8,6 +15,8 @@
     suburbCentroids: [],
     lastRows: [],
   };
+
+  let flavourEl = null;
 
   const locationEl = document.getElementById("location");
   const sectorEl = document.getElementById("sector");
@@ -77,6 +86,7 @@
     errEl.textContent = "";
     copyMetaEl.textContent = "";
     metaEl.textContent = "";
+    if (flavourEl) { flavourEl.textContent = ""; flavourEl.classList.remove("visible"); }
     tableEl.hidden = true;
     copyBtn.disabled = true;
     state.lastRows = [];
@@ -95,6 +105,10 @@
       renderRows(state.lastRows);
       const sectorLabel = sector === "all" ? "all sectors" : sector;
       metaEl.textContent = `${state.lastRows.length} schools within ${radiusKm} km of ${center.label} (${sectorLabel})`;
+      if (flavourEl && window.getRegionFlavour) {
+        flavourEl.textContent = window.getRegionFlavour(center.label, stateCode);
+        flavourEl.classList.add("visible");
+      }
       tableEl.hidden = false;
       copyBtn.disabled = state.lastRows.filter((r) => (r.public_email || "").trim().length > 0).length === 0;
     } catch (err) {
@@ -126,6 +140,11 @@
     state.schools = schools;
     state.postcodeCentroids = postcodes;
     state.suburbCentroids = suburbs;
+    // Inject the flavour box after the meta line
+    flavourEl = document.createElement("div");
+    flavourEl.className = "flavour";
+    metaEl.insertAdjacentElement("afterend", flavourEl);
+
     metaEl.textContent = `Loaded ${schools.length} schools for ${stateName}.`;
     if (schools.length === 0) {
       errEl.textContent = `${stateName} dataset not loaded yet. This page is ready for future data.`;
