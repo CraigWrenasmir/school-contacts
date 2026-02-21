@@ -46,6 +46,7 @@ TRUSTED_GOV_EMAIL_DOMAINS = {
     "eq.edu.au",              # QLD govt: schoolname@eq.edu.au (on *.qld.edu.au sites)
     "qed.qld.gov.au",         # QLD govt: alternative dept domain
     "education.tas.gov.au",   # TAS govt: schoolname@education.tas.gov.au
+    "decyp.tas.gov.au",       # TAS govt: DECYP (Dept for Education, Children & Young People)
     "education.nt.gov.au",    # NT govt: admin.school@education.nt.gov.au
     "ntschools.net",          # NT directory aliases often use @ntschools.net
     "ed.act.edu.au",          # ACT govt: school aliases on central ed domain
