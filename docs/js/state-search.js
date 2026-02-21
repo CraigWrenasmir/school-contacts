@@ -14,9 +14,13 @@
     postcodeCentroids: {},
     suburbCentroids: [],
     lastRows: [],
+    lastSearch: null, // { center, radiusKm, sectorLabel }
   };
 
+  let currentRows = []; // displayed rows (may be filtered by emailsOnly)
   let flavourEl = null;
+  let emailsOnlyEl = null;
+  let downloadBtn = null;
 
   const locationEl = document.getElementById("location");
   const sectorEl = document.getElementById("sector");
@@ -74,12 +78,36 @@
         <td>${esc(r.sector)}</td>
         <td>${esc(r.suburb)}</td>
         <td>${esc(r.postcode)}</td>
+        <td>${r.phone ? `<a href="tel:${esc(r.phone)}">${esc(r.phone)}</a>` : ""}</td>
         <td>${esc(r.distance_km)}</td>
         <td>${r.public_email ? `<a href="mailto:${esc(r.public_email)}">${esc(r.public_email)}</a>` : ""}</td>
         <td>${r.contact_form_url ? `<a href="${esc(r.contact_form_url)}" target="_blank" rel="noopener">Open</a>` : ""}</td>
         <td>${r.website_url ? `<a href="${esc(r.website_url)}" target="_blank" rel="noopener">Visit</a>` : ""}</td>
       </tr>
     `).join("");
+  }
+
+  function updateMeta() {
+    if (!state.lastSearch) return;
+    const { center, radiusKm, sectorLabel } = state.lastSearch;
+    const emailsOnly = emailsOnlyEl && emailsOnlyEl.checked;
+    const suffix = emailsOnly
+      ? ` — ${currentRows.length} of ${state.lastRows.length} have an email`
+      : "";
+    metaEl.textContent = `${state.lastRows.length} schools within ${radiusKm} km of ${center.label} (${sectorLabel})${suffix}`;
+  }
+
+  function applyFilter() {
+    if (!state.lastSearch) return;
+    const emailsOnly = emailsOnlyEl && emailsOnlyEl.checked;
+    currentRows = emailsOnly
+      ? state.lastRows.filter((r) => (r.public_email || "").trim().length > 0)
+      : [...state.lastRows];
+    renderRows(currentRows);
+    updateMeta();
+    const hasEmails = currentRows.some((r) => (r.public_email || "").trim().length > 0);
+    copyBtn.disabled = !hasEmails;
+    if (downloadBtn) downloadBtn.disabled = currentRows.length === 0;
   }
 
   function runSearch() {
@@ -89,35 +117,40 @@
     if (flavourEl) { flavourEl.textContent = ""; flavourEl.classList.remove("visible"); }
     tableEl.hidden = true;
     copyBtn.disabled = true;
+    if (downloadBtn) downloadBtn.disabled = true;
     state.lastRows = [];
+    state.lastSearch = null;
+    currentRows = [];
 
     try {
       const center = resolveCenter(locationEl.value);
       const radiusKm = Number(radiusEl.value);
       const sector = sectorEl.value;
-      const rows = state.schools
+      const sectorLabel = sector === "all" ? "all sectors" : sector;
+
+      state.lastRows = state.schools
         .filter((s) => (sector === "all" ? true : String(s.sector).toLowerCase() === sector))
         .map((s) => ({ ...s, distance_km: haversineKm(center.lat, center.lon, s.lat, s.lon) }))
         .filter((s) => s.distance_km <= radiusKm)
-        .sort((a, b) => a.distance_km - b.distance_km);
+        .sort((a, b) => a.distance_km - b.distance_km)
+        .map((r) => ({ ...r, distance_km: Number(r.distance_km.toFixed(2)) }));
 
-      state.lastRows = rows.map((r) => ({ ...r, distance_km: Number(r.distance_km.toFixed(2)) }));
-      renderRows(state.lastRows);
-      const sectorLabel = sector === "all" ? "all sectors" : sector;
-      metaEl.textContent = `${state.lastRows.length} schools within ${radiusKm} km of ${center.label} (${sectorLabel})`;
+      state.lastSearch = { center, radiusKm, sectorLabel };
+
+      applyFilter();
+      tableEl.hidden = false;
+
       if (flavourEl && window.getRegionFlavour) {
         flavourEl.textContent = window.getRegionFlavour(center.label, stateCode);
         flavourEl.classList.add("visible");
       }
-      tableEl.hidden = false;
-      copyBtn.disabled = state.lastRows.filter((r) => (r.public_email || "").trim().length > 0).length === 0;
     } catch (err) {
       errEl.textContent = err.message || "Search failed.";
     }
   }
 
   async function copyEmails() {
-    const emails = [...new Set(state.lastRows.map((r) => (r.public_email || "").trim()).filter((x) => x.length > 0))];
+    const emails = [...new Set(currentRows.map((r) => (r.public_email || "").trim()).filter((x) => x.length > 0))];
     if (!emails.length) {
       copyMetaEl.textContent = "No public emails found in current result set.";
       return;
@@ -130,6 +163,27 @@
     }
   }
 
+  function downloadCSV() {
+    if (!currentRows.length) return;
+    const { center, radiusKm, sectorLabel } = state.lastSearch;
+    const headers = ["School", "Sector", "Suburb", "Postcode", "Phone", "Distance (km)", "Email", "Contact Form", "Website"];
+    const rows = currentRows.map((r) => [
+      r.school_name, r.sector, r.suburb, r.postcode,
+      r.phone || "", r.distance_km,
+      r.public_email || "", r.contact_form_url || "", r.website_url || "",
+    ]);
+    const csv = [headers, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell || "").replace(/"/g, '""')}"`).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `schools-${stateCode}-${center.label.replace(/\s+/g, "-").toLowerCase()}-${radiusKm}km.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function init() {
     const base = `./data/${stateCode}`;
     const [schools, postcodes, suburbs] = await Promise.all([
@@ -140,7 +194,34 @@
     state.schools = schools;
     state.postcodeCentroids = postcodes;
     state.suburbCentroids = suburbs;
-    // Inject the flavour box after the meta line
+
+    // ── Inject "Emails only" checkbox ──────────────────────────────────────
+    const emailsOnlyWrapper = document.createElement("label");
+    emailsOnlyWrapper.className = "emails-only-label";
+    emailsOnlyEl = document.createElement("input");
+    emailsOnlyEl.type = "checkbox";
+    emailsOnlyEl.id = "emailsOnly";
+    emailsOnlyWrapper.appendChild(emailsOnlyEl);
+    emailsOnlyWrapper.appendChild(document.createTextNode(" Emails only"));
+    copyBtn.insertAdjacentElement("afterend", emailsOnlyWrapper);
+    emailsOnlyEl.addEventListener("change", applyFilter);
+
+    // ── Inject "Download CSV" button ───────────────────────────────────────
+    downloadBtn = document.createElement("button");
+    downloadBtn.type = "button";
+    downloadBtn.textContent = "Download CSV";
+    downloadBtn.disabled = true;
+    emailsOnlyWrapper.insertAdjacentElement("afterend", downloadBtn);
+    downloadBtn.addEventListener("click", downloadCSV);
+
+    // ── Inject Phone column header ─────────────────────────────────────────
+    const theadCells = tableEl.querySelectorAll("thead th");
+    const distanceTh = theadCells[4]; // after School, Sector, Suburb, Postcode
+    const phoneTh = document.createElement("th");
+    phoneTh.textContent = "Phone";
+    distanceTh.insertAdjacentElement("beforebegin", phoneTh);
+
+    // ── Inject flavour box ─────────────────────────────────────────────────
     flavourEl = document.createElement("div");
     flavourEl.className = "flavour";
     metaEl.insertAdjacentElement("afterend", flavourEl);
