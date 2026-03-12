@@ -36,6 +36,16 @@ INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
 ALLOWED_TLDS = {"au", "com", "org", "net", "edu", "gov", "school", "online"}
 PLACEHOLDER_DOMAINS = {"example.com", "test.com", "domain.com", "email.com", "yourdomain.com"}
 
+# Government department or authority mailboxes that appear on school websites but
+# are NOT school-specific contact addresses. These get scraped when a school's site
+# includes a department widget, footer link, or building-authority notice.
+BLOCKED_GOV_EMAILS = {
+    "vsba@education.vic.gov.au",        # Victorian School Building Authority
+    "vsba@edumail.vic.gov.au",           # VSBA legacy domain
+    "edline@education.vic.gov.au",       # VIC dept general enquiry line
+    "privacy@education.vic.gov.au",      # VIC dept privacy office
+}
+
 # Australian state education departments use centralised email domains that differ
 # from individual school website domains (e.g. *.vic.edu.au websites use
 # @education.vic.gov.au email addresses). These trusted domains bypass the
@@ -128,6 +138,8 @@ def classify_public_email(
         return None, "invalid", "invalid_format"
 
     local_part, domain = clean.split("@", 1)
+    if clean in BLOCKED_GOV_EMAILS:
+        return None, "invalid", "blocked_gov_mailbox"
     if len(local_part) < 2:
         return None, "invalid", "local_too_short"
     if domain in PLACEHOLDER_DOMAINS:
